@@ -12,18 +12,17 @@ This is an n8n community node. It lets an n8n workflow talk to [Osaurus](https:/
 - [Resources](#resources)
 - [Version history](#version-history)
 - [Development](#development)
+- [Releasing](#releasing)
 
 ## Installation
 
 Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in the n8n community nodes documentation.
 
-Once the package is on npm:
-
 1. In n8n, open **Settings → Community Nodes**.
 2. Install `n8n-nodes-osaurus`.
 3. Restart n8n if it does not reload nodes automatically.
 
-Until it is published, install from this repo:
+For local development, install from this repo instead of npm:
 
 ```bash
 # in this repository
@@ -129,6 +128,8 @@ You do not need this package. The same contract works with HTTP Request + Code +
 
 ### 0.1.0
 
+First npm release (`n8n-nodes-osaurus@0.1.0`), published from GitHub Actions with provenance.
+
 - Channel credential (HMAC / shared-secret header) with a 404-as-success probe.
 - Channel operations: send-and-wait, poll, verify push.
 - Osaurus Trigger for verified outbound pushes.
@@ -145,3 +146,9 @@ pnpm dev
 ```
 
 `pnpm test` is Vitest coverage of signing, envelope bytes, and SSE collection (including the known-answer HMAC from the Osaurus custom-HTTP runner tests). No live Osaurus instance is required.
+
+## Releasing
+
+Do not `npm publish` from a laptop. Local `npm run release` only bumps, tags, and opens a GitHub Release. The tag triggers [`.github/workflows/publish.yml`](.github/workflows/publish.yml), which publishes to npm with a provenance attestation.
+
+First ship is `git tag 0.1.0 && git push origin 0.1.0` after `NPM_TOKEN` is set — not `npm run release` (that would bump to 0.1.1). Full steps: [RELEASING.md](RELEASING.md).

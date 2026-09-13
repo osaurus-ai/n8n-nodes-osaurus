@@ -1,0 +1,105 @@
+# Publishes this n8n community node package to npm on every version tag push.
+#
+# Starting May 1 2026, n8n requires all community nodes to be published via
+# GitHub Actions with npm provenance statements. This workflow satisfies that
+# requirement. Provenance lets anyone cryptographically verify that a package
+# was built by this exact workflow, from this exact repository and commit.
+#
+# @n8n/node-cli ≥ 0.23.0 is required. Earlier versions do not support the
+# provenance flag passed by `npm run release` in CI, and the publish step will
+# fail.
+#
+# ─── ONE-TIME SETUP ────────────────────────────────────────────────────────────
+#
+# Option A — OIDC Trusted Publishing (recommended after the first publish):
+# 1. Log in to npmjs.com and open this package's settings.
+# 2. Under "Publish access" → "Trusted Publishers", click "Add a publisher".
+# 3. Select GitHub Actions and fill in:
+#      Repository owner: osaurus-ai
+#      Repository name:  n8n-nodes-osaurus
+#      Workflow name:    publish.yml
+#      Environment:      (leave blank)
+# 4. Leave the NPM_TOKEN secret unset. GitHub's OIDC token is used instead.
+#
+# Option B — npm Automation Token (required for the first publish only):
+# npm cannot attach a Trusted Publisher until the package name exists.
+# 1. Create a granular access token scoped to this package (Read and write).
+# 2. In GitHub: Settings → Secrets and variables → Actions → NPM_TOKEN.
+# 3. After 0.1.0 is live, switch to Option A and delete NPM_TOKEN.
+#
+# ─── RELEASE PROCESS ───────────────────────────────────────────────────────────
+#
+# First ship (package.json is already 0.1.0 — do not run `npm run release`):
+#
+#   git tag 0.1.0 && git push origin 0.1.0
+#
+# Later releases (from a clean main):
+#
+#   npm run release
+#
+# That lints, builds, prompts for a version bump, updates the changelog,
+# commits, tags, and pushes — which triggers this workflow to publish to npm.
+# Local `npm run release` does NOT publish. See RELEASING.md.
+
+name: Publish
+
+on:
+  push:
+    tags:
+      # Matches 0.1.0, 1.2.3, v0.1.0, 2.0.0-rc.1, etc.
+      - '*.*.*'
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Required to mint an OIDC token for npm provenance attestation.
+      id-token: write
+      # GitHub Release when the tag was pushed without local release-it.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Ensure npm supports OIDC trusted publishing
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Release
+        # In GITHUB_ACTIONS, `n8n-node release` lints, builds, and publishes
+        # with NPM_CONFIG_PROVENANCE=true. It does not bump the version.
+        #
+        # Option A (OIDC): leave NPM_TOKEN unset — the token step is skipped.
+        # Option B (token): set NPM_TOKEN — it is written to .npmrc here.
+        run: |
+          [ -n "$NPM_TOKEN" ] && npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+          npm run release
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "GitHub Release ${tag} already exists"
+          else
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
