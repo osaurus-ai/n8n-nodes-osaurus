@@ -1,0 +1,59 @@
+{
+	"name": "n8n-nodes-osaurus",
+	"version": "0.1.0",
+	"description": "n8n community nodes for the Osaurus n8n agent channel and loopback agent API",
+	"license": "MIT",
+	"homepage": "https://github.com/osaurus-ai/n8n-nodes-osaurus",
+	"keywords": [
+		"n8n-community-node-package",
+		"osaurus",
+		"n8n",
+		"webhook",
+		"agent"
+	],
+	"author": {
+		"name": "Osaurus",
+		"email": "hello@osaurus.ai"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/osaurus-ai/n8n-nodes-osaurus.git"
+	},
+	"scripts": {
+		"build": "n8n-node build",
+		"build:watch": "tsc --watch",
+		"dev": "n8n-node dev",
+		"lint": "n8n-node lint",
+		"lint:fix": "n8n-node lint --fix",
+		"test": "vitest run",
+		"release": "n8n-node release",
+		"prepublishOnly": "n8n-node prerelease"
+	},
+	"files": [
+		"dist"
+	],
+	"n8n": {
+		"n8nNodesApiVersion": 1,
+		"strict": true,
+		"credentials": [
+			"dist/credentials/OsaurusChannelApi.credentials.js",
+			"dist/credentials/OsaurusApi.credentials.js"
+		],
+		"nodes": [
+			"dist/nodes/Osaurus/Osaurus.node.js",
+			"dist/nodes/Osaurus/OsaurusTrigger.node.js"
+		]
+	},
+	"devDependencies": {
+		"@n8n/node-cli": "*",
+		"eslint": "9.39.4",
+		"n8n-workflow": "*",
+		"prettier": "3.8.3",
+		"release-it": "20.2.0",
+		"typescript": "5.9.3",
+		"vitest": "^3.2.4"
+	},
+	"peerDependencies": {
+		"n8n-workflow": "*"
+	}
+}
