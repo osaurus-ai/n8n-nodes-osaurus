@@ -1,5 +1,5 @@
 {
-	"node": "n8n-nodes-osaurus.osaurusTrigger",
+	"node": "@osaurus/n8n-nodes-osaurus.osaurusTrigger",
 	"nodeVersion": "1.0",
 	"codexVersion": "1.0",
 	"categories": ["AI", "Development"],

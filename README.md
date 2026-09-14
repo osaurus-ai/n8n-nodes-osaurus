@@ -19,7 +19,7 @@ This is an n8n community node. It lets an n8n workflow talk to [Osaurus](https:/
 Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in the n8n community nodes documentation.
 
 1. In n8n, open **Settings → Community Nodes**.
-2. Install `n8n-nodes-osaurus`.
+2. Install `@osaurus/n8n-nodes-osaurus`.
 3. Restart n8n if it does not reload nodes automatically.
 
 For local development, install from this repo instead of npm:
@@ -85,7 +85,7 @@ The code (`osrs-n8n-1.…`) is base64url JSON carrying every URL Osaurus can be 
 | Verification Method | `HMAC-SHA256` (default) or `Shared secret header` — must match **Connect n8n → Advanced → Verification** |
 | Header Name | Optional override; defaults `X-Osaurus-Channel-Signature` / `X-Osaurus-Channel-Secret` |
 
-Credentials saved before 0.2.0 (no **Setup** field) are treated as Manual and keep working.
+Credentials saved without a **Setup** field are treated as Manual and keep working.
 
 ### Osaurus API
 
@@ -145,22 +145,16 @@ You do not need this package. The same contract works with HTTP Request + Code +
 
 ## Version history
 
-### 0.2.0
-
-- **Pairing code** setup for the Channel credential: paste one `osrs-n8n-1.…` string from Osaurus **Pair with n8n**. Manual four-field setup remains as the advanced option; pre-0.2.0 credentials load unchanged.
-- **Secure Channel v1 client.** When the code pins an agent address, every Channel request is end-to-end encrypted through the Osaurus relay; no plaintext downgrade. Zero runtime dependencies (in-repo keccak-256 and secp256k1 recovery, pinned to shared Swift/TS known-answer vectors).
-- **Candidate probing** via the new `GET /channels/n8n/{id}/ping` route: the credential Test names the URL it reached and whether the link is encrypted; the winner is cached and re-probed on network errors. Replaces the 404-as-success probe, which also spent the connection's 401 penalty budget.
-- **Fail loudly** on `status: "rejected"` and `dispatch: "suppressed:*"` with the rejection reason and the Osaurus setting to fix.
-- Osaurus Trigger accepts pairing-code credentials for push verification and shares the credential Test.
-
 ### 0.1.0
 
-First npm release (`n8n-nodes-osaurus@0.1.0`), published from GitHub Actions with provenance.
+First npm release (`@osaurus/n8n-nodes-osaurus@0.1.0`), published from GitHub Actions with provenance.
 
-- Channel credential (HMAC / shared-secret header) with a 404-as-success probe.
-- Channel operations: send-and-wait, poll, verify push.
-- Osaurus Trigger for verified outbound pushes.
-- API credential (`osk-v1`) plus agent run / dispatch for loopback. No Secure Channel client.
+- **Pairing code** setup for the Channel credential: paste one `osrs-n8n-1.…` string from Osaurus **Connect n8n → Pair with n8n**. Manual four-field setup remains as the advanced option.
+- **Secure Channel v1 client.** When the code pins an agent address, every Channel request is end-to-end encrypted through the Osaurus relay; no plaintext downgrade. Zero runtime dependencies (in-repo keccak-256 and secp256k1 recovery, pinned to shared Swift/TS known-answer vectors).
+- **Candidate probing** via `GET /channels/n8n/{id}/ping`: the credential Test names the URL it reached and whether the link is encrypted.
+- **Fail loudly** on `status: "rejected"` and `dispatch: "suppressed:*"` with the rejection reason and the Osaurus setting to fix.
+- Channel operations: send-and-wait, poll, verify push. Osaurus Trigger for verified outbound pushes.
+- API credential (`osk-v1`) plus agent run / dispatch for loopback. The Agent resource does not go through Secure Channel.
 
 ## Development
 
@@ -178,4 +172,4 @@ pnpm dev
 
 Do not `npm publish` from a laptop. Local `npm run release` only bumps, tags, and opens a GitHub Release. The tag triggers [`.github/workflows/publish.yml`](.github/workflows/publish.yml), which publishes to npm with a provenance attestation.
 
-`package.json` is already `0.2.0`; ship it with `git tag 0.2.0 && git push origin 0.2.0` once `NPM_TOKEN` is set — not `npm run release` (that would bump to 0.2.1). Full steps: [RELEASING.md](RELEASING.md).
+`package.json` is already `0.1.0`; ship it with `git tag 0.1.0 && git push origin 0.1.0` once `NPM_TOKEN` is set — not `npm run release` (that would bump to 0.1.1). Full steps: [RELEASING.md](RELEASING.md).
