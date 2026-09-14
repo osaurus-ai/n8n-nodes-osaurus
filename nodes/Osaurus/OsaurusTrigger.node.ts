@@ -17,17 +17,20 @@ import {
 	verifySharedSecret,
 	verifySignature,
 } from '../../src/channel';
+import { testOsaurusChannelCredential } from '../../src/credentialTest';
+import { resolveChannelConfig } from '../../src/pairing';
 
+/** Secret + method + header from either a pairing code or manual fields. */
 function asChannel(data: ICredentialDataDecryptedObject): {
 	secret: string;
 	verificationMethod: ChannelVerificationMethod;
 	headerName: string;
 } {
+	const config = resolveChannelConfig(data as Record<string, unknown>);
 	return {
-		secret: String(data.secret ?? ''),
-		verificationMethod:
-			data.verificationMethod === 'shared_secret_header' ? 'shared_secret_header' : 'hmac_sha256',
-		headerName: String(data.headerName ?? ''),
+		secret: config.secret,
+		verificationMethod: config.verificationMethod,
+		headerName: config.headerName,
 	};
 }
 
@@ -59,6 +62,7 @@ export class OsaurusTrigger implements INodeType {
 			{
 				name: 'osaurusChannelApi',
 				required: true,
+				testedBy: 'osaurusChannelApiTest',
 			},
 		],
 		webhooks: [
@@ -80,6 +84,12 @@ export class OsaurusTrigger implements INodeType {
 		],
 	};
 
+	methods = {
+		credentialTest: {
+			osaurusChannelApiTest: testOsaurusChannelCredential,
+		},
+	};
+
 	webhookMethods = {
 		default: {
 			async checkExists(): Promise<boolean> {
@@ -95,7 +105,12 @@ export class OsaurusTrigger implements INodeType {
 	};
 
 	async webhook(this: IWebhookFunctions): Promise<IWebhookResponseData> {
-		const credentials = asChannel(await this.getCredentials('osaurusChannelApi'));
+		let credentials: ReturnType<typeof asChannel>;
+		try {
+			credentials = asChannel(await this.getCredentials('osaurusChannelApi'));
+		} catch (error) {
+			throw new NodeOperationError(this.getNode(), (error as Error).message);
+		}
 		const req = this.getRequestObject() as { rawBody?: Buffer | string; body?: unknown };
 		const raw =
 			typeof req.rawBody === 'string'
@@ -103,7 +118,8 @@ export class OsaurusTrigger implements INodeType {
 				: Buffer.isBuffer(req.rawBody)
 					? req.rawBody.toString('utf8')
 					: JSON.stringify(req.body ?? this.getBodyData());
-		const headerName = credentials.headerName.trim() || defaultHeaderName(credentials.verificationMethod);
+		const headerName =
+			credentials.headerName.trim() || defaultHeaderName(credentials.verificationMethod);
 		const provided = headerValue(this.getHeaderData() as IDataObject, headerName);
 		const fallback = headerValue(
 			this.getHeaderData() as IDataObject,
@@ -118,7 +134,10 @@ export class OsaurusTrigger implements INodeType {
 				? verifySharedSecret(credentials.secret, header)
 				: verifySignature(credentials.secret, raw, header);
 		if (!ok) {
-			throw new NodeOperationError(this.getNode(), 'Rejected Osaurus push: signature did not verify.');
+			throw new NodeOperationError(
+				this.getNode(),
+				'Rejected Osaurus push: signature did not verify.',
+			);
 		}
 
 		const envelope = parseOutboundPushEnvelope(raw);

@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-osaurus",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "n8n community nodes for the Osaurus n8n agent channel and loopback agent API",
 	"license": "MIT",
 	"homepage": "https://github.com/osaurus-ai/n8n-nodes-osaurus",
@@ -49,6 +49,8 @@
 	},
 	"devDependencies": {
 		"@n8n/node-cli": "*",
+		"@noble/curves": "^2.4.0",
+		"@noble/hashes": "^2.4.0",
 		"eslint": "9.39.4",
 		"n8n-workflow": "*",
 		"prettier": "3.8.3",

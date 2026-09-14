@@ -145,7 +145,9 @@ export function taskUrl(baseUrl: string, connectionId: string, taskId: string): 
 	return joinUrl(baseUrl, `/channels/n8n/${connectionId}/tasks/${taskId}`);
 }
 
-export const PROBE_TASK_ID = '00000000-0000-0000-0000-000000000000';
+export function pingUrl(baseUrl: string, connectionId: string): string {
+	return joinUrl(baseUrl, `/channels/n8n/${connectionId}/ping`);
+}
 
 export function isTerminalTaskStatus(status: string): boolean {
 	return status === 'completed' || status === 'failed' || status === 'cancelled';
