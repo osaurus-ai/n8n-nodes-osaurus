@@ -1,5 +1,5 @@
 {
-	"node": "n8n-nodes-osaurus.osaurus",
+	"node": "@osaurus/n8n-nodes-osaurus.osaurus",
 	"nodeVersion": "1.0",
 	"codexVersion": "1.0",
 	"categories": ["AI", "Development"],

@@ -23,8 +23,9 @@
 #
 # Option B — npm Automation Token (required for the first publish only):
 # npm cannot attach a Trusted Publisher until the package name exists.
-# 1. Create a granular access token scoped to this package (Read and write).
-# 2. In GitHub: Settings → Secrets and variables → Actions → NPM_TOKEN.
+# 1. Create a granular access token on the `osaurus` npm org (Read and write,
+#    Bypass 2FA). Do not scope it to a package name that does not exist yet.
+# 2. In GitHub (osaurus-ai org or this repo): Actions secret NPM_TOKEN.
 # 3. After 0.1.0 is live, switch to Option A and delete NPM_TOKEN.
 #
 # ─── RELEASE PROCESS ───────────────────────────────────────────────────────────
