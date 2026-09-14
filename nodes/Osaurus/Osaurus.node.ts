@@ -1,56 +1,69 @@
 import type {
 	ICredentialDataDecryptedObject,
-	ICredentialTestFunctions,
-	ICredentialsDecrypted,
 	IDataObject,
 	IExecuteFunctions,
-	IHttpRequestOptions,
-	INodeCredentialTestResult,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError, sleep } from 'n8n-workflow';
 
-import type { ChannelVerificationMethod, InboundAttachment } from '../../src/channel';
+import type { InboundAttachment } from '../../src/channel';
 import {
 	DEFAULT_SECRET_HEADER,
 	DEFAULT_SIGNATURE_HEADER,
 	buildInboundEnvelope,
 	channelAuthHeaders,
-	inboundUrl,
 	isTerminalTaskStatus,
 	joinUrl,
 	parseOutboundPushEnvelope,
-	PROBE_TASK_ID,
-	taskUrl,
 	verifySharedSecret,
 	verifySignature,
 } from '../../src/channel';
+import { testOsaurusChannelCredential } from '../../src/credentialTest';
+import { httpFromExecute } from '../../src/n8nHttp';
+import type { ChannelConfig } from '../../src/pairing';
+import { resolveChannelConfig } from '../../src/pairing';
+import { SecureChannelError } from '../../src/secureChannel';
 import { collectSseContent } from '../../src/sse';
-
-type ChannelCredentials = {
-	baseUrl: string;
-	connectionId: string;
-	secret: string;
-	verificationMethod: ChannelVerificationMethod;
-	headerName?: string;
-};
+import type { ChannelTransport } from '../../src/transport';
+import { forgetSelectedBaseUrl, makeTransport, selectBaseUrl } from '../../src/transport';
 
 type ApiCredentials = {
 	baseUrl: string;
 	accessKey: string;
 };
 
-function asChannel(data: ICredentialDataDecryptedObject): ChannelCredentials {
-	return {
-		baseUrl: String(data.baseUrl ?? '').replace(/\/+$/, ''),
-		connectionId: String(data.connectionId ?? ''),
-		secret: String(data.secret ?? ''),
-		verificationMethod:
-			data.verificationMethod === 'shared_secret_header' ? 'shared_secret_header' : 'hmac_sha256',
-		headerName: String(data.headerName ?? ''),
-	};
+/** Resolved channel credential plus the transport that reaches it. */
+type ChannelContext = {
+	config: ChannelConfig;
+	transport: ChannelTransport;
+	baseUrl: string;
+};
+
+function asChannelConfig(
+	this: IExecuteFunctions,
+	data: ICredentialDataDecryptedObject,
+): ChannelConfig {
+	try {
+		return resolveChannelConfig(data as Record<string, unknown>);
+	} catch (error) {
+		// PairingCodeError text is already user-facing; surface it verbatim.
+		throw new NodeOperationError(this.getNode(), error as Error);
+	}
+}
+
+/** Resolve credential → config → transport → reachable base URL. */
+async function channelContext(this: IExecuteFunctions): Promise<ChannelContext> {
+	const config = asChannelConfig.call(this, await this.getCredentials('osaurusChannelApi'));
+	const transport = makeTransport(config, httpFromExecute(this));
+	try {
+		const selected = await selectBaseUrl(config, transport);
+		return { config, transport, baseUrl: selected.baseUrl };
+	} catch (error) {
+		// NoReachableCandidateError / SecureChannelError carry actionable text.
+		throw new NodeOperationError(this.getNode(), error as Error);
+	}
 }
 
 function asApi(data: ICredentialDataDecryptedObject): ApiCredentials {
@@ -83,7 +96,7 @@ export class Osaurus implements INodeType {
 		group: ['transform'],
 		version: 1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
-		description: 'Talk to an Osaurus n8n channel or run a local agent',
+		description: 'Send a message to an Osaurus agent through an n8n channel, or run a local agent directly',
 		defaults: {
 			name: 'Osaurus',
 		},
@@ -121,12 +134,12 @@ export class Osaurus implements INodeType {
 					{
 						name: 'Channel',
 						value: 'channel',
-						description: 'Secret-verified /channels/n8n webhook and poll',
+						description: 'Send a message to an n8n channel and wait for the agent reply. Uses the Osaurus Channel credential.',
 					},
 					{
 						name: 'Agent',
 						value: 'agent',
-						description: 'Plaintext osk-v1 /agents run or dispatch (loopback / trusted LAN)',
+						description: 'Run a local agent directly with an osk-v1 access key. Plaintext HTTP: same Mac or trusted LAN only.',
 					},
 				],
 				default: 'channel',
@@ -141,19 +154,19 @@ export class Osaurus implements INodeType {
 					{
 						name: 'Send Message and Wait',
 						value: 'sendAndWait',
-						description: 'POST the v1 envelope and poll until the agent reply is terminal',
+						description: 'Deliver the message and poll until the agent has replied, been rejected, or failed',
 						action: 'Send a channel message and wait',
 					},
 					{
 						name: 'Poll Task',
 						value: 'pollTask',
-						description: 'GET one poll_url / task once',
+						description: 'Check one reply task once instead of waiting',
 						action: 'Poll a channel task',
 					},
 					{
 						name: 'Verify Inbound Push',
 						value: 'verifyPush',
-						description: 'Verify an Osaurus outbound HMAC body and parse the envelope',
+						description: 'Check the signature on a reply Osaurus pushed to a Webhook node and parse it',
 						action: 'Verify an inbound push',
 					},
 				],
@@ -169,13 +182,13 @@ export class Osaurus implements INodeType {
 					{
 						name: 'Run',
 						value: 'run',
-						description: 'POST /agents/{ID}/run and collect the SSE answer',
+						description: 'Run the agent and return the whole answer',
 						action: 'Run an agent',
 					},
 					{
 						name: 'Dispatch',
 						value: 'dispatch',
-						description: 'POST /agents/{ID}/dispatch and optionally wait on poll_url',
+						description: 'Start the agent in the background and optionally wait for the result',
 						action: 'Dispatch an agent',
 					},
 				],
@@ -188,7 +201,7 @@ export class Osaurus implements INodeType {
 				default: 'n8n-test',
 				required: true,
 				displayOptions: { show: { resource: ['channel'], operation: ['sendAndWait'] } },
-				description: 'Must match an allowlisted line on the Osaurus n8n channel',
+				description: 'Must be listed under Allowed Conversations in Osaurus → Channels → n8n → Who may speak',
 			},
 			{
 				displayName: 'Sender ID',
@@ -197,7 +210,7 @@ export class Osaurus implements INodeType {
 				default: 'workflow',
 				required: true,
 				displayOptions: { show: { resource: ['channel'], operation: ['sendAndWait'] } },
-				description: 'Must match an allowlisted sender.ID on the Osaurus n8n channel',
+				description: 'Must be listed under Allowed Senders in Osaurus → Channels → n8n → Who may speak',
 			},
 			{
 				displayName: 'Content',
@@ -214,7 +227,7 @@ export class Osaurus implements INodeType {
 				type: 'string',
 				default: '={{`n8n:${$execution.id}`}}',
 				displayOptions: { show: { resource: ['channel'], operation: ['sendAndWait'] } },
-				description: 'Idempotency key. Reusing the same ID returns 200 duplicate.',
+				description: 'Idempotency key. Sending the same ID twice returns the first result instead of a new event.',
 			},
 			{
 				displayName: 'Sender Display Name',
@@ -243,7 +256,7 @@ export class Osaurus implements INodeType {
 				type: 'json',
 				default: '[]',
 				displayOptions: { show: { resource: ['channel'], operation: ['sendAndWait'] } },
-				description: 'Metadata only. Osaurus does not fetch file bytes.',
+				description: 'Metadata only (name, type, URL). Osaurus does not download the files.',
 			},
 			{
 				displayName: 'Poll Interval (Seconds)',
@@ -277,7 +290,7 @@ export class Osaurus implements INodeType {
 				type: 'string',
 				default: '',
 				displayOptions: { show: { resource: ['channel'], operation: ['pollTask'] } },
-				description: 'Absolute poll_url from a 202, or leave empty and set Task ID',
+				description: 'The poll_url from a Send Message and Wait result, or leave empty and set Task ID',
 			},
 			{
 				displayName: 'Task ID',
@@ -294,7 +307,7 @@ export class Osaurus implements INodeType {
 				default: '',
 				required: true,
 				displayOptions: { show: { resource: ['channel'], operation: ['verifyPush'] } },
-				description: 'Exact JSON bytes Osaurus posted to the webhook',
+				description: 'The exact request body Osaurus posted, unmodified',
 			},
 			{
 				displayName: 'Signature Header',
@@ -311,7 +324,7 @@ export class Osaurus implements INodeType {
 				default: '',
 				required: true,
 				displayOptions: { show: { resource: ['agent'] } },
-				description: 'Agent UUID, crypto address, or "default" on loopback',
+				description: 'Agent UUID or address from Osaurus → Agents, or "default" from the same Mac',
 			},
 			{
 				displayName: 'Message',
@@ -352,41 +365,7 @@ export class Osaurus implements INodeType {
 
 	methods = {
 		credentialTest: {
-			async osaurusChannelApiTest(
-				this: ICredentialTestFunctions,
-				credential: ICredentialsDecrypted,
-			): Promise<INodeCredentialTestResult> {
-				const credentials = asChannel(credential.data ?? {});
-				try {
-					// ICredentialTestFunctions only exposes helpers.request.
-					// eslint-disable-next-line @n8n/community-nodes/no-deprecated-workflow-functions
-					const response = (await this.helpers.request({
-						method: 'GET',
-						uri: taskUrl(credentials.baseUrl, credentials.connectionId, PROBE_TASK_ID),
-						headers: channelAuthHeaders(
-							credentials.verificationMethod,
-							credentials.secret,
-							'',
-							credentials.headerName,
-						),
-						resolveWithFullResponse: true,
-						simple: false,
-					})) as { statusCode?: number; status?: number };
-					const code = response.statusCode ?? response.status ?? 0;
-					if (code === 401) {
-						return { status: 'Error', message: 'Channel secret was rejected (401).' };
-					}
-					if (code === 404 || code === 200 || code === 202 || code === 403) {
-						return {
-							status: 'OK',
-							message: 'Channel secret was accepted (probe task is expected to be missing).',
-						};
-					}
-					return { status: 'Error', message: `Unexpected status ${code} from the probe poll.` };
-				} catch (error) {
-					return { status: 'Error', message: (error as Error).message };
-				}
-			},
+			osaurusChannelApiTest: testOsaurusChannelCredential,
 		},
 	};
 
@@ -414,17 +393,20 @@ export class Osaurus implements INodeType {
 }
 
 async function executeChannel(this: IExecuteFunctions, index: number): Promise<IDataObject> {
-	const credentials = asChannel(await this.getCredentials('osaurusChannelApi'));
 	const operation = this.getNodeParameter('operation', index) as string;
 
 	if (operation === 'verifyPush') {
-		return verifyPush.call(this, index, credentials);
+		// Pure verification: no network, so no candidate probing.
+		const config = asChannelConfig.call(this, await this.getCredentials('osaurusChannelApi'));
+		return verifyPush.call(this, index, config);
 	}
+
+	const context = await channelContext.call(this);
 	if (operation === 'pollTask') {
 		const pollUrl = (this.getNodeParameter('pollUrl', index, '') as string).trim();
 		const taskId = (this.getNodeParameter('taskId', index, '') as string).trim();
-		const url = resolvePollUrl.call(this, credentials, pollUrl, taskId);
-		return (await channelRequest.call(this, credentials, 'GET', url, '')) as IDataObject;
+		const path = resolvePollPath.call(this, context.config, pollUrl, taskId);
+		return (await channelRequest.call(this, context, 'GET', path, '')) as IDataObject;
 	}
 
 	const conversationId = this.getNodeParameter('conversationId', index) as string;
@@ -451,25 +433,24 @@ async function executeChannel(this: IExecuteFunctions, index: number): Promise<I
 
 	const accepted = await channelRequest.call(
 		this,
-		credentials,
+		context,
 		'POST',
-		inboundUrl(credentials.baseUrl, credentials.connectionId),
+		`/channels/n8n/${context.config.connectionId}/inbound`,
 		raw,
 	);
 	const acceptedObject = accepted as IDataObject;
+	assertInboundAccepted.call(this, acceptedObject, context.config, { conversationId, senderId });
 	const pollPath = String(acceptedObject.poll_url ?? '');
 	if (!pollPath) {
 		return acceptedObject;
 	}
 
-	const url = pollPath.startsWith('http')
-		? pollPath
-		: joinUrl(credentials.baseUrl, pollPath);
+	const path = pathOnly(pollPath);
 	const deadline = Date.now() + timeoutMs;
 	let last: IDataObject = acceptedObject;
 	while (Date.now() < deadline) {
 		await sleep(pollInterval);
-		last = (await channelRequest.call(this, credentials, 'GET', url, '')) as IDataObject;
+		last = (await channelRequest.call(this, context, 'GET', path, '')) as IDataObject;
 		const status = String(last.status ?? '');
 		if (isTerminalTaskStatus(status)) {
 			return last;
@@ -481,20 +462,84 @@ async function executeChannel(this: IExecuteFunctions, index: number): Promise<I
 	);
 }
 
-function verifyPush(
+/**
+ * The ingress answers 202 for both accepted and rejected events. A rejected
+ * or suppressed event is the likeliest first-run failure right after pairing,
+ * so surface it as a node error with the fix instead of a green item.
+ */
+function assertInboundAccepted(
 	this: IExecuteFunctions,
-	index: number,
-	credentials: ChannelCredentials,
-): IDataObject {
+	response: IDataObject,
+	config: ChannelConfig,
+	sent: { conversationId: string; senderId: string },
+): void {
+	const status = String(response.status ?? '');
+	const reason = String(response.reason ?? '');
+	const where = `Osaurus → Settings → Channels → n8n (connection '${config.connectionId}')`;
+	if (status === 'rejected') {
+		const conversationHint = ` Add it under Who may speak in ${where}.`;
+		switch (reason) {
+			case 'sender_not_allowlisted':
+				throw new NodeOperationError(
+					this.getNode(),
+					`Osaurus rejected the event: sender '${sent.senderId}' is not allowlisted on connection '${config.connectionId}'.${conversationHint}`,
+					{
+						description:
+							'The Sender ID this node sends must exactly match a line in the sender allowlist.',
+					},
+				);
+			case 'room_not_allowlisted':
+				throw new NodeOperationError(
+					this.getNode(),
+					`Osaurus rejected the event: conversation '${sent.conversationId}' is not allowlisted on connection '${config.connectionId}'.${conversationHint}`,
+					{
+						description:
+							'The Conversation ID this node sends must exactly match a line in the conversation allowlist.',
+					},
+				);
+			case 'bot_message_denied':
+				throw new NodeOperationError(
+					this.getNode(),
+					`Osaurus rejected the event: bot senders are not allowed. Turn off "Sender is bot" on this node or allow bot messages in ${where}.`,
+				);
+			default:
+				throw new NodeOperationError(
+					this.getNode(),
+					`Osaurus rejected the event (${reason || 'unknown reason'}). Check the allowlists in ${where}.`,
+				);
+		}
+	}
+	const dispatch = String(response.dispatch ?? '');
+	if (dispatch.startsWith('suppressed')) {
+		const detail = dispatch.slice('suppressed:'.length) || 'unknown';
+		throw new NodeOperationError(
+			this.getNode(),
+			`Osaurus stored the event but did not run an agent (${detail}). Turn on Reply with an Agent and pick an agent in How Osaurus replies, ${where}.`,
+		);
+	}
+}
+
+/** Strip scheme/host from a `poll_url`; the transport supplies the base. */
+function pathOnly(urlOrPath: string): string {
+	if (!urlOrPath.startsWith('http')) return urlOrPath.startsWith('/') ? urlOrPath : `/${urlOrPath}`;
+	try {
+		const url = new URL(urlOrPath);
+		return `${url.pathname}${url.search}`;
+	} catch {
+		return urlOrPath;
+	}
+}
+
+function verifyPush(this: IExecuteFunctions, index: number, config: ChannelConfig): IDataObject {
 	const raw = this.getNodeParameter('rawBody', index) as string;
 	const header = (this.getNodeParameter('signatureHeader', index, '') as string).trim();
-	assertPushVerified.call(this, credentials, raw, header);
+	assertPushVerified.call(this, config, raw, header);
 	return parseOutboundPushEnvelope(raw) as IDataObject;
 }
 
 function assertPushVerified(
 	this: IExecuteFunctions,
-	credentials: ChannelCredentials,
+	credentials: Pick<ChannelConfig, 'verificationMethod' | 'secret'>,
 	raw: string,
 	header: string,
 ): void {
@@ -550,7 +595,9 @@ async function executeAgent(this: IExecuteFunctions, index: number): Promise<IDa
 		joinUrl(credentials.baseUrl, `/agents/${agentId}/dispatch`),
 		body,
 	);
-	const object = (typeof dispatched === 'string' ? responseBody(dispatched) : dispatched) as IDataObject;
+	const object = (
+		typeof dispatched === 'string' ? responseBody(dispatched) : dispatched
+	) as IDataObject;
 	const wait = this.getNodeParameter('waitForDispatch', index, false) as boolean;
 	if (!wait) {
 		return object;
@@ -575,42 +622,53 @@ async function executeAgent(this: IExecuteFunctions, index: number): Promise<IDa
 	throw new NodeOperationError(this.getNode(), 'Timed out waiting for a dispatched agent run.');
 }
 
+/** One secret-authenticated channel request over the selected transport and base URL. */
 async function channelRequest(
 	this: IExecuteFunctions,
-	credentials: ChannelCredentials,
+	context: ChannelContext,
 	method: 'GET' | 'POST',
-	url: string,
+	path: string,
 	raw: string,
 ): Promise<unknown> {
-	const headers: IHttpRequestOptions['headers'] = {
-		...channelAuthHeaders(
-			credentials.verificationMethod,
-			credentials.secret,
-			raw,
-			credentials.headerName,
-		),
-	};
-	if (method === 'POST') {
-		headers['Content-Type'] = 'application/json';
+	const { config, transport, baseUrl } = context;
+	const headers = channelAuthHeaders(
+		config.verificationMethod,
+		config.secret,
+		raw,
+		config.headerName,
+	);
+	let response: { status: number; body: string };
+	try {
+		response = await transport.request(baseUrl, method, path, raw, headers);
+	} catch (error) {
+		// Network-level failure: forget the cached winner so the next run re-probes.
+		forgetSelectedBaseUrl(config);
+		if (error instanceof SecureChannelError) {
+			throw new NodeOperationError(this.getNode(), error.message);
+		}
+		throw new NodeOperationError(
+			this.getNode(),
+			`Osaurus channel ${method} ${baseUrl}${path} failed: ${(error as Error).message}`,
+		);
 	}
-	const response = (await this.helpers.httpRequest({
-		method,
-		url,
-		headers,
-		body: method === 'POST' ? raw : undefined,
-		json: false,
-		returnFullResponse: true,
-		ignoreHttpStatusErrors: true,
-	})) as { statusCode?: number; status?: number; body?: unknown };
 
-	const code = statusOf(response);
+	const code = response.status;
 	const parsed = responseBody(response.body);
 	if (code >= 400) {
-		const error =
+		const detail =
 			parsed && typeof parsed === 'object'
 				? JSON.stringify(parsed)
 				: String(parsed ?? `HTTP ${code}`);
-		throw new NodeOperationError(this.getNode(), `Osaurus channel ${method} ${url} failed (${code}): ${error}`);
+		const hint =
+			code === 426
+				? ' Remote callers need Secure Channel: bind a local agent in Osaurus → Channels → n8n → How Osaurus replies and copy a fresh pairing code from Connect n8n, or turn on Remote callers there.'
+				: code === 401
+					? ' The pairing code is stale: regenerate the secret in Osaurus and paste a fresh code.'
+					: '';
+		throw new NodeOperationError(
+			this.getNode(),
+			`Osaurus channel ${method} ${baseUrl}${path} failed (${code}): ${detail}${hint}`,
+		);
 	}
 	return parsed;
 }
@@ -648,22 +706,25 @@ async function apiRequest(
 			parsed && typeof parsed === 'object'
 				? JSON.stringify(parsed)
 				: String(parsed ?? `HTTP ${code}`);
-		throw new NodeOperationError(this.getNode(), `Osaurus API ${method} ${url} failed (${code}): ${error}.${hint}`);
+		throw new NodeOperationError(
+			this.getNode(),
+			`Osaurus API ${method} ${url} failed (${code}): ${error}.${hint}`,
+		);
 	}
 	return parsed;
 }
 
-function resolvePollUrl(
+function resolvePollPath(
 	this: IExecuteFunctions,
-	credentials: ChannelCredentials,
+	config: ChannelConfig,
 	pollUrl: string,
 	taskId: string,
 ): string {
 	if (pollUrl) {
-		return pollUrl.startsWith('http') ? pollUrl : joinUrl(credentials.baseUrl, pollUrl);
+		return pathOnly(pollUrl);
 	}
 	if (taskId) {
-		return taskUrl(credentials.baseUrl, credentials.connectionId, taskId);
+		return `/channels/n8n/${config.connectionId}/tasks/${taskId}`;
 	}
 	throw new NodeOperationError(this.getNode(), 'Set Poll URL or Task ID');
 }
