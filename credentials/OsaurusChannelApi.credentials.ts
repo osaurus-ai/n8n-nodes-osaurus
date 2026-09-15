@@ -17,9 +17,10 @@ import { resolveChannelConfig } from '../src/pairing';
  * Osaurus Channel credential.
  *
  * Default setup is a single **pairing code** copied from Osaurus → Settings →
- * Channels → n8n → Connect n8n. It carries the URL candidates, connection
- * id, secret, verification method, and (when a local agent is bound) the
- * agent address that switches the node to Secure Channel. **Manual** keeps
+ * Channels → n8n → Pair. It carries the URL valid for the location picked in
+ * Osaurus (Where is your n8n?), connection id, secret, verification method,
+ * and (when a local agent is bound) the agent address that switches the
+ * node to Secure Channel. **Manual** keeps
  * the original four fields for saved credentials and unusual topologies.
  *
  * There is no static `test` block: the probe has to walk candidates and, for
@@ -67,12 +68,12 @@ export class OsaurusChannelApi implements ICredentialType {
 			default: '',
 			placeholder: 'osrs-n8n-1.eyJ2IjoxLCJ1cmxzIjpb…',
 			description:
-				'From Osaurus → Settings → Channels → n8n → Connect n8n → Pair with n8n. It contains the channel secret; treat it like one.',
+				'From Osaurus → Settings → Channels → n8n → Pair. The code contains only the URLs valid for the location you picked in Osaurus (Where is your n8n?), plus the channel secret — treat it like one.',
 			displayOptions: { show: { setup: ['pairingCode'] } },
 		},
 		{
 			displayName:
-				'Press Test. The node picks the first URL in the code that answers, and encrypts end-to-end when the code carries an agent address.',
+				'Press Test. The node pings the URL(s) in the code and encrypts end-to-end when the code carries an agent address. If n8n moves (e.g. to a hosted instance), change Where is your n8n? in Osaurus and paste the new code.',
 			name: 'pairingNotice',
 			type: 'notice',
 			default: '',
@@ -94,7 +95,7 @@ export class OsaurusChannelApi implements ICredentialType {
 			type: 'string',
 			default: '',
 			placeholder: 'n8n-local',
-			description: 'The ID from Osaurus → Settings → Channels → n8n → Name this channel.',
+			description: 'The Connection ID from Osaurus → Settings → Channels → n8n → Name it.',
 			displayOptions: { show: { setup: ['manual'] } },
 		},
 		{
@@ -104,7 +105,7 @@ export class OsaurusChannelApi implements ICredentialType {
 			typeOptions: { password: true },
 			default: '',
 			description:
-				'The channel secret from Osaurus → Connect n8n. Not an osk-v1 access key.',
+				'The channel secret from Osaurus → Pair → Advanced. Not an osk-v1 access key.',
 			displayOptions: { show: { setup: ['manual'] } },
 		},
 		{
@@ -123,7 +124,7 @@ export class OsaurusChannelApi implements ICredentialType {
 			],
 			default: 'hmac_sha256',
 			description:
-				'Must match Osaurus → Connect n8n → Advanced → Verification. HMAC signs the exact raw body; poll signs the empty body.',
+				'Must match Osaurus → Pair → Advanced → Verification. HMAC signs the exact raw body; poll signs the empty body.',
 			displayOptions: { show: { setup: ['manual'] } },
 		},
 		{

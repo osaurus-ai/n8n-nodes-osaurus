@@ -1,7 +1,7 @@
 import type { ChannelVerificationMethod } from './channel';
 
 /**
- * Pairing code issued by Osaurus → Settings → Channels → n8n → Connect n8n → "Pair with n8n".
+ * Pairing code issued by Osaurus → Settings → Channels → n8n → Pair → "Pair with n8n".
  *
  *     osrs-n8n-1.<base64url(compact JSON)>
  *
@@ -81,7 +81,7 @@ export function decodePairingCode(code: string): PairingCodePayload {
 	const trimmed = code.trim();
 	if (!trimmed.startsWith(PAIRING_CODE_PREFIX)) {
 		throw new PairingCodeError(
-			'This is not an Osaurus pairing code. Copy it from Osaurus → Settings → Channels → n8n → Connect n8n → Pair with n8n (it starts with "osrs-n8n-1.").',
+			'This is not an Osaurus pairing code. Copy it from Osaurus → Settings → Channels → n8n → Pair (it starts with "osrs-n8n-1.").',
 		);
 	}
 	const dot = trimmed.indexOf('.');
@@ -170,7 +170,7 @@ export function resolveChannelConfig(data: Record<string, unknown>): ChannelConf
 	}
 	if (setup === 'pairingCode' && !hasManualFields) {
 		throw new PairingCodeError(
-			'Paste the pairing code from Osaurus → Settings → Channels → n8n → Connect n8n → Pair with n8n, or switch Setup to Manual.',
+			'Paste the pairing code from Osaurus → Settings → Channels → n8n → Pair, or switch Setup to Manual.',
 		);
 	}
 	// Manual, or a credential saved by 0.1.x before the Setup field existed.
