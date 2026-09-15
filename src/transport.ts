@@ -13,6 +13,11 @@ export type ChannelResponse = { status: number; body: string };
  * speaks HTTP directly; `SecureChannel` wraps every request in `/secure/call`
  * pinned to the pairing code's agent address.
  */
+export type ChannelRequestOptions = {
+	/** Per-request cap; the transport's default applies when omitted. */
+	timeoutMs?: number;
+};
+
 export interface ChannelTransport {
 	readonly kind: 'plaintext' | 'secure_channel';
 	request(
@@ -21,8 +26,16 @@ export interface ChannelTransport {
 		path: string,
 		rawBody: string,
 		headers: Record<string, string>,
+		options?: ChannelRequestOptions,
 	): Promise<ChannelResponse>;
 }
+
+/**
+ * Probe budget per plaintext candidate. A stale LAN or Docker address that
+ * silently drops packets must not consume the credential test's whole
+ * budget before the next candidate gets a turn.
+ */
+export const PROBE_TIMEOUT_MS = 5_000;
 
 export class PlaintextTransport implements ChannelTransport {
 	readonly kind = 'plaintext' as const;
@@ -38,6 +51,7 @@ export class PlaintextTransport implements ChannelTransport {
 		path: string,
 		rawBody: string,
 		headers: Record<string, string>,
+		options: ChannelRequestOptions = {},
 	): Promise<ChannelResponse> {
 		const merged: Record<string, string> = { Accept: 'application/json', ...headers };
 		if (method === 'POST') merged['Content-Type'] = 'application/json';
@@ -46,7 +60,7 @@ export class PlaintextTransport implements ChannelTransport {
 			url: joinUrl(baseUrl, path),
 			headers: merged,
 			body: method === 'POST' ? rawBody : undefined,
-			timeoutMs: this.timeoutMs,
+			timeoutMs: options.timeoutMs ?? this.timeoutMs,
 		});
 		return { status: response.status, body: response.body };
 	}
@@ -66,6 +80,8 @@ export class SecureChannelTransport implements ChannelTransport {
 		path: string,
 		rawBody: string,
 		headers: Record<string, string>,
+		// `ChannelRequestOptions` is intentionally not taken: Secure Channel
+		// owns its own handshake timeouts.
 	): Promise<ChannelResponse> {
 		const response = await this.client.request(baseUrl, this.agentAddress, {
 			method,
@@ -170,6 +186,7 @@ export async function pingCandidate(
 			pingPath(config.connectionId),
 			'',
 			headers,
+			{ timeoutMs: PROBE_TIMEOUT_MS },
 		);
 		const result: PingResult = { baseUrl, status: response.status, body: response.body };
 		if (response.status === 200) {
@@ -202,12 +219,53 @@ export function explainProbe(result: PingResult, config: ChannelConfig): string 
 		case 404:
 			return `${result.baseUrl}: connection '${config.connectionId}' not found (404). Check the connection still exists in Osaurus → Settings → Channels → n8n.`;
 		case 426:
-			return `${result.baseUrl}: remote callers need Secure Channel (426). Bind a local agent in Osaurus → Channels → n8n → How Osaurus replies and copy a fresh pairing code from Connect n8n, or turn on Remote callers there.`;
+			return `${result.baseUrl}: callers from another machine need Secure Channel (426). Bind a local agent in Osaurus → Channels → n8n → Who answers? and copy a fresh pairing code from Pair, or choose Where is your n8n? → Another machine on my network and allow plaintext HTTP there.`;
 		case 429:
 			return `${result.baseUrl}: rate limited (429). Wait a few seconds and test again.`;
 		default:
 			return `${result.baseUrl}: HTTP ${result.status} ${result.body.slice(0, 200)}`;
 	}
+}
+
+/**
+ * True for URLs that can only be reached from the same Mac or its LAN:
+ * loopback, Docker Desktop's host alias, RFC1918 / link-local / ULA ranges,
+ * and `.local` names.
+ */
+export function isPrivateOnlyUrl(url: string): boolean {
+	let host: string;
+	try {
+		host = new URL(url).hostname.toLowerCase();
+	} catch {
+		return false;
+	}
+	if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+	if (host === 'localhost' || host === 'host.docker.internal' || host.endsWith('.local'))
+		return true;
+	if (host === '::1' || host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd'))
+		return true;
+	const parts = host.split('.');
+	if (parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p))) {
+		const [a, b] = parts.map(Number);
+		if (a === 127 || a === 10 || a === 0) return true;
+		if (a === 192 && b === 168) return true;
+		if (a === 172 && b >= 16 && b <= 31) return true;
+		if (a === 169 && b === 254) return true;
+	}
+	return false;
+}
+
+/**
+ * When every candidate is private-only and every failure was a network
+ * error (nothing answered at all), this n8n is almost certainly not on the
+ * Mac's network — the classic "pasted a local code into hosted n8n" case.
+ */
+export function locationHint(attempts: PingResult[]): string | null {
+	if (attempts.length === 0) return null;
+	const allNetworkErrors = attempts.every((a) => a.error !== undefined || a.status === 0);
+	const allPrivate = attempts.every((a) => isPrivateOnlyUrl(a.baseUrl));
+	if (!allNetworkErrors || !allPrivate) return null;
+	return 'These URLs only work from the same Mac or its network. If this n8n runs somewhere else (hosted, another network), open Osaurus → Channels → n8n → Where is your n8n?, choose Remote, enable Relay under Who answers?, and paste the new pairing code.';
 }
 
 /**
@@ -247,8 +305,9 @@ export async function selectBaseUrl(
 	}
 	const summary = attempts.map((a) => `• ${explainProbe(a, config)}`).join('\n');
 	const where = config.source === 'pairing_code' ? 'in the pairing code' : 'in the credential';
+	const hint = locationHint(attempts);
 	throw new NoReachableCandidateError(
-		`No Osaurus URL ${where} answered /ping for connection '${config.connectionId}'.\n${summary}`,
+		`No Osaurus URL ${where} answered /ping for connection '${config.connectionId}'.\n${summary}${hint ? `\n${hint}` : ''}`,
 		attempts,
 	);
 }

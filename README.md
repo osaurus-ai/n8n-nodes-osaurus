@@ -2,6 +2,8 @@
 
 This is an n8n community node. It lets an n8n workflow talk to [Osaurus](https://osaurus.ai) — a local agent runtime — over the first-party **n8n agent channel** (secret-verified webhook in, poll or webhook out, end-to-end encrypted through the Osaurus relay when paired with an agent) and, optionally, the plaintext **agent API** on the same Mac.
 
+**How the two connect:** n8n calls Osaurus, never the other way around. The one **pairing code** you copy from Osaurus into this node's credential is the whole hand-off — it already contains the URL that reaches your Mac from where n8n runs, the connection id, the secret and the verification method. You only ever type an n8n URL into Osaurus if you want it to *push* replies to a workflow (the optional Outbound Webhook URL).
+
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/reference/license/) workflow automation platform.
 
 - [Installation](#installation)
@@ -65,13 +67,13 @@ Used for `/channels/n8n/...`. That prefix is bearer-exempt. The **channel secret
 
 **Setup: Pairing code** (default) — one paste.
 
-1. In Osaurus, **Settings → Channels → n8n**, open the connection and go to **Connect n8n**. A new channel already has a random secret.
+1. In Osaurus, **Settings → Channels → n8n**, open the connection and go to **Pair**. A new channel already has a random secret, and the code appears as soon as the earlier steps (name, **Where is your n8n?**, **Who answers?**) are answered. If Osaurus shows a blocker instead of a code (for example *Relay not connected* for a Remote n8n), fix that first — the code it withholds could not have worked.
 2. Under **Pair with n8n**, click the copy button.
 3. In n8n, create an **Osaurus Channel** credential, leave **Setup** on *Pairing Code*, paste, and click **Test**.
 
-The code (`osrs-n8n-1.…`) is base64url JSON carrying every URL Osaurus can be reached at (loopback, `host.docker.internal`, LAN when exposed, relay when enabled), the connection id, the secret, the verification method, and — when a local agent is bound under **How Osaurus replies** — that agent's pinned address. **It contains the secret; treat it like one.** Regenerating the secret in Osaurus invalidates old codes.
+The code (`osrs-n8n-1.…`) is base64url JSON carrying **only the URL valid for the location you picked in Osaurus** (`127.0.0.1` for This Mac, `host.docker.internal` for Docker Desktop, the LAN address, or the relay URL for Remote), the connection id, the secret, the verification method, and — when a local agent is bound under **Who answers?** — that agent's pinned address. **It contains the secret; treat it like one.** Regenerating the secret in Osaurus invalidates old codes; moving n8n means changing **Where is your n8n?** and pasting a new code.
 
-**Test** probes the URLs in order with `GET /channels/n8n/{id}/ping` and reports the first that answers, e.g. `Connected to https://0x…agent.osaurus.ai (hmac_sha256, end-to-end encrypted).` A `426` on a candidate means that URL is remote and the Osaurus connection requires Secure Channel; either include an agent in the pairing code or allow plaintext for remote callers in Osaurus. The winner is cached per credential and re-probed on network errors or on the next explicit Test.
+**Test** probes the URL(s) in order with `GET /channels/n8n/{id}/ping` (5 s per plaintext candidate) and reports the first that answers, e.g. `Connected to https://0x…agent.osaurus.ai (hmac_sha256, end-to-end encrypted).` A `426` on a candidate means that URL is reached from another machine and the Osaurus connection requires Secure Channel; either include an agent in the pairing code or allow plaintext HTTP under **Where is your n8n? → Another machine on my network**. If every URL in the code is private (loopback / Docker / LAN) and none answers, Test says so and points you at **Where is your n8n? → Remote**. The winner is cached per credential and re-probed on network errors or on the next explicit Test.
 
 **Secure Channel.** When the code carries an agent address, every Channel operation is wrapped in Osaurus Secure Channel v1 (X25519 + HKDF + ChaCha20-Poly1305, server identity pinned to the agent's secp256k1 address). The relay only forwards opaque frames and cannot read prompts or replies. There is no plaintext fallback: if `/secure/session` is missing the node fails with a clear error instead of downgrading. The implementation has **no runtime dependencies** — keccak-256 and secp256k1 recovery are implemented in `src/crypto/` and pinned against shared Swift/TypeScript vectors.
 
@@ -80,9 +82,9 @@ The code (`osrs-n8n-1.…`) is base64url JSON carrying every URL Osaurus can be 
 | Field | Notes |
 | --- | --- |
 | Base URL | `http://127.0.0.1:1337` from this Mac; `http://host.docker.internal:1337` from Docker Desktop on this Mac |
-| Connection ID | Id from Osaurus **Settings → Channels → n8n → Name this channel** |
-| Channel Secret | From **Connect n8n**; stored in the Osaurus Keychain |
-| Verification Method | `HMAC-SHA256` (default) or `Shared secret header` — must match **Connect n8n → Advanced → Verification** |
+| Connection ID | Id from Osaurus **Settings → Channels → n8n → Name it** |
+| Channel Secret | From **Pair → Advanced**; stored in the Osaurus Keychain |
+| Verification Method | `HMAC-SHA256` (default) or `Shared secret header` — must match **Pair → Advanced → Verification** |
 | Header Name | Optional override; defaults `X-Osaurus-Channel-Signature` / `X-Osaurus-Channel-Secret` |
 
 Credentials saved without a **Setup** field are treated as Manual and keep working.
@@ -110,22 +112,23 @@ Used for `/agents/{id}/run` and `/dispatch` on **loopback or a trusted LAN**.
 
 In Osaurus, **Settings → Channels → n8n**:
 
-1. **Name this channel** — the connection id that appears in the pairing code and in every error this node raises.
-2. **Who may speak** — `conversation_id` and `sender.id` on **Send Message and Wait** must each match an allowlisted line (`conversation_id: "n8n-test"` is the usual first test). A non-allowlisted sender makes the node fail with the reason and where to fix it.
-3. **How Osaurus replies** — bind a local agent so the pairing code includes its address (end-to-end encryption, and the only way through the relay with **Remote callers** off). Default reply mode is poll (this node waits for you). Optional push needs a public **HTTPS** webhook (loopback / RFC1918 / `http://` are refused). If **Allow Agents to Send Messages** is off, push fails; poll still returns the reply.
-4. **Connect n8n** — the secret (pre-generated for new channels), **Pair with n8n**, the **Remote callers** plaintext toggle, and under **Advanced** everything for a plain HTTP Request node: URLs per topology, verification method, sample envelope, HMAC Code node, curl, and the osk-v1 key for the Agent resource.
-5. **Live check** — save, run the workflow, and watch each stage of the event arrive.
+1. **Name it** — the display name; the connection id is filled from it and appears in the pairing code and in every error this node raises.
+2. **Where is your n8n?** — This Mac, Docker Desktop on this Mac, another machine on your network, or Remote. This picks the URL the pairing code carries, whether Relay is needed, and whether plaintext HTTP is even offered (LAN only).
+3. **Who answers?** — the agent that replies. Binding a local agent makes the pairing code end-to-end encrypted, and for Remote this step also has the **Enable Relay** button. Default reply mode is poll (this node waits for you). Optional push needs a public **HTTPS** webhook (loopback / RFC1918 / `http://` are refused) — this is the only place an n8n URL is entered. If **Allow Agents to Send Messages** is off, push fails; poll still returns the reply.
+4. **Pair** — **Pair with n8n** (the code, or the blocker that is stopping it), and under **Advanced** the secret (pre-generated, with Rotate), verification method, and everything for a plain HTTP Request node: URLs for the chosen location, sample envelope, HMAC Code node, curl, and the osk-v1 key for the Agent resource.
+5. **Prove it** — **first run asks for approval.** Run the workflow once; Osaurus shows *Workflow '<conversation_id>' (sender '<sender.id>') wants to use <channel> — Allow / Deny*. Allow adds those ids to the allowlists and saves; run the workflow again. Until then this node fails with `pending_approval` and the exact ids to approve. Nothing reaches the agent before you allow it. Allowlists can still be edited by hand under **Advanced**.
 
 ### Remote n8n (n8n Cloud or another host)
 
-Enable **Relay** for the bound agent in Osaurus, then copy the pairing code. The code now includes the relay URL, and because it carries the agent address the node speaks Secure Channel through the relay. You do not need to turn on *Remote callers*, open a port, or run a tunnel.
+In Osaurus choose **Where is your n8n? → Remote**, bind a local agent under **Who answers?** and press **Enable Relay** there. The pairing code is issued once the relay is connected; it carries only the relay URL, and because it also carries the agent address the node speaks Secure Channel through the relay. You do not need to allow plaintext, open a port, or run a tunnel. If you already pasted a code that only had local URLs, Test tells you and points at this step.
 
 ### Send a message and use the reply
 
 1. Add **Osaurus** → Channel → **Send Message and Wait**.
-2. Set Conversation ID and Sender ID to allowlisted values.
+2. Set Conversation ID and Sender ID to any stable values (e.g. the workflow name and `workflow`).
 3. Set Content, e.g. `Reply with the single word PONG`.
-4. The item output is the poll JSON: `status`, `output`, `task_id`. `status: "rejected"` and `dispatch: "suppressed:*"` throw instead of returning silently, with the reason and the Osaurus setting to change.
+4. Run once. The first run fails with **pending_approval** and the ids to approve; press **Allow** under **Prove it** in Osaurus and run again.
+5. The item output is the poll JSON: `status`, `output`, `task_id`. `status: "rejected"` and `dispatch: "suppressed:*"` throw instead of returning silently, with the reason and the Osaurus setting to change.
 
 ### Receive an auto-reply push
 
@@ -145,11 +148,20 @@ You do not need this package. The same contract works with HTTP Request + Code +
 
 ## Version history
 
+### 0.2.0
+
+Copy and diagnostics for the redesigned Osaurus n8n sheet (*Name it → Where is your n8n? → Who answers? → Pair → Prove it*). Wire contract unchanged.
+
+- **`pending_approval`** rejection: the first run of a workflow now fails with the exact conversation / sender ids to approve under **Prove it**, instead of an allowlist error. Older Osaurus builds' `sender_not_allowlisted` / `room_not_allowlisted` are still handled.
+- **Location-aware probe hint**: when every URL in the code is private (loopback / Docker / LAN) and none answers, Test explains that the code was issued for a local n8n and points at **Where is your n8n? → Remote**.
+- **Per-candidate probe timeout** (5 s for plaintext candidates) so a stale LAN address no longer burns the whole Test budget.
+- Field descriptions, credential notices and error messages point at the new step names.
+
 ### 0.1.0
 
 First npm release (`@osaurus/n8n-nodes-osaurus@0.1.0`), published from GitHub Actions with provenance.
 
-- **Pairing code** setup for the Channel credential: paste one `osrs-n8n-1.…` string from Osaurus **Connect n8n → Pair with n8n**. Manual four-field setup remains as the advanced option.
+- **Pairing code** setup for the Channel credential: paste one `osrs-n8n-1.…` string from Osaurus **Pair → Pair with n8n**. Manual four-field setup remains as the advanced option.
 - **Secure Channel v1 client.** When the code pins an agent address, every Channel request is end-to-end encrypted through the Osaurus relay; no plaintext downgrade. Zero runtime dependencies (in-repo keccak-256 and secp256k1 recovery, pinned to shared Swift/TS known-answer vectors).
 - **Candidate probing** via `GET /channels/n8n/{id}/ping`: the credential Test names the URL it reached and whether the link is encrypted.
 - **Fail loudly** on `status: "rejected"` and `dispatch: "suppressed:*"` with the rejection reason and the Osaurus setting to fix.
@@ -172,4 +184,4 @@ pnpm dev
 
 Do not `npm publish` from a laptop. Local `npm run release` only bumps, tags, and opens a GitHub Release. The tag triggers [`.github/workflows/publish.yml`](.github/workflows/publish.yml), which publishes to npm with a provenance attestation.
 
-`package.json` is already `0.1.0`; ship it with `git tag 0.1.0 && git push origin 0.1.0` once `NPM_TOKEN` is set — not `npm run release` (that would bump to 0.1.1). Full steps: [RELEASING.md](RELEASING.md).
+`package.json` is already `0.2.0`; ship it with `git tag 0.2.0 && git push origin 0.2.0` once `NPM_TOKEN` is set — not `npm run release` (that would bump to 0.2.1). Full steps: [RELEASING.md](RELEASING.md).

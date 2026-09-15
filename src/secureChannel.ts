@@ -508,7 +508,7 @@ export class SecureChannelClient {
 		if (response.status === 404) {
 			throw new SecureChannelError(
 				'peer_unsupported',
-				`${baseUrl} does not offer Secure Channel for agent ${agentAddress.toLowerCase()} (404 on /secure/session). Make sure the agent bound in Osaurus → Channels → n8n → How Osaurus replies still exists, then re-copy the pairing code.`,
+				`${baseUrl} does not offer Secure Channel for agent ${agentAddress.toLowerCase()} (404 on /secure/session). Make sure the agent bound in Osaurus → Channels → n8n → Who answers? still exists, then re-copy the pairing code.`,
 			);
 		}
 		if (response.status === 429) {

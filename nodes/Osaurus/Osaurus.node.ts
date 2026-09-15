@@ -21,6 +21,7 @@ import {
 	verifySignature,
 } from '../../src/channel';
 import { testOsaurusChannelCredential } from '../../src/credentialTest';
+import { describeInboundOutcome } from '../../src/inboundOutcome';
 import { httpFromExecute } from '../../src/n8nHttp';
 import type { ChannelConfig } from '../../src/pairing';
 import { resolveChannelConfig } from '../../src/pairing';
@@ -201,7 +202,8 @@ export class Osaurus implements INodeType {
 				default: 'n8n-test',
 				required: true,
 				displayOptions: { show: { resource: ['channel'], operation: ['sendAndWait'] } },
-				description: 'Must be listed under Allowed Conversations in Osaurus → Channels → n8n → Who may speak',
+				description:
+					'Any stable ID you choose (e.g. the workflow name). Each conversation gets its own agent session. The first run asks for approval in Osaurus → Channels → n8n → Prove it; approving remembers it.',
 			},
 			{
 				displayName: 'Sender ID',
@@ -210,7 +212,8 @@ export class Osaurus implements INodeType {
 				default: 'workflow',
 				required: true,
 				displayOptions: { show: { resource: ['channel'], operation: ['sendAndWait'] } },
-				description: 'Must be listed under Allowed Senders in Osaurus → Channels → n8n → Who may speak',
+				description:
+					'Any stable ID for who is speaking (e.g. "workflow"). The first run asks for approval in Osaurus → Channels → n8n → Prove it; approving remembers it.',
 			},
 			{
 				displayName: 'Content',
@@ -473,50 +476,13 @@ function assertInboundAccepted(
 	config: ChannelConfig,
 	sent: { conversationId: string; senderId: string },
 ): void {
-	const status = String(response.status ?? '');
-	const reason = String(response.reason ?? '');
-	const where = `Osaurus → Settings → Channels → n8n (connection '${config.connectionId}')`;
-	if (status === 'rejected') {
-		const conversationHint = ` Add it under Who may speak in ${where}.`;
-		switch (reason) {
-			case 'sender_not_allowlisted':
-				throw new NodeOperationError(
-					this.getNode(),
-					`Osaurus rejected the event: sender '${sent.senderId}' is not allowlisted on connection '${config.connectionId}'.${conversationHint}`,
-					{
-						description:
-							'The Sender ID this node sends must exactly match a line in the sender allowlist.',
-					},
-				);
-			case 'room_not_allowlisted':
-				throw new NodeOperationError(
-					this.getNode(),
-					`Osaurus rejected the event: conversation '${sent.conversationId}' is not allowlisted on connection '${config.connectionId}'.${conversationHint}`,
-					{
-						description:
-							'The Conversation ID this node sends must exactly match a line in the conversation allowlist.',
-					},
-				);
-			case 'bot_message_denied':
-				throw new NodeOperationError(
-					this.getNode(),
-					`Osaurus rejected the event: bot senders are not allowed. Turn off "Sender is bot" on this node or allow bot messages in ${where}.`,
-				);
-			default:
-				throw new NodeOperationError(
-					this.getNode(),
-					`Osaurus rejected the event (${reason || 'unknown reason'}). Check the allowlists in ${where}.`,
-				);
-		}
-	}
-	const dispatch = String(response.dispatch ?? '');
-	if (dispatch.startsWith('suppressed')) {
-		const detail = dispatch.slice('suppressed:'.length) || 'unknown';
-		throw new NodeOperationError(
-			this.getNode(),
-			`Osaurus stored the event but did not run an agent (${detail}). Turn on Reply with an Agent and pick an agent in How Osaurus replies, ${where}.`,
-		);
-	}
+	const outcome = describeInboundOutcome(response, config, sent);
+	if (!outcome) return;
+	throw new NodeOperationError(
+		this.getNode(),
+		outcome.message,
+		outcome.description ? { description: outcome.description } : undefined,
+	);
 }
 
 /** Strip scheme/host from a `poll_url`; the transport supplies the base. */
@@ -661,7 +627,7 @@ async function channelRequest(
 				: String(parsed ?? `HTTP ${code}`);
 		const hint =
 			code === 426
-				? ' Remote callers need Secure Channel: bind a local agent in Osaurus → Channels → n8n → How Osaurus replies and copy a fresh pairing code from Connect n8n, or turn on Remote callers there.'
+				? ' Callers from another machine need Secure Channel: bind a local agent in Osaurus → Channels → n8n → Who answers? and copy a fresh pairing code from Pair, or choose Where is your n8n? → Another machine on my network and allow plaintext HTTP there.'
 				: code === 401
 					? ' The pairing code is stale: regenerate the secret in Osaurus and paste a fresh code.'
 					: '';

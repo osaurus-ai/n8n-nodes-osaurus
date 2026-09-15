@@ -4,9 +4,12 @@ import type { ChannelConfig } from '../src/pairing';
 import type { HttpFn } from '../src/secureChannel';
 import {
 	NoReachableCandidateError,
+	PROBE_TIMEOUT_MS,
 	PlaintextTransport,
 	describeConnection,
 	explainProbe,
+	isPrivateOnlyUrl,
+	locationHint,
 	makeTransport,
 	pingPath,
 	resetSelectedBaseUrls,
@@ -153,9 +156,65 @@ describe('selectBaseUrl', () => {
 		expect(caught).toBeInstanceOf(NoReachableCandidateError);
 		const message = (caught as Error).message;
 		expect(message).toContain('ECONNREFUSED');
-		expect(message).toContain('remote callers need Secure Channel (426)');
+		expect(message).toContain('callers from another machine need Secure Channel (426)');
+		expect(message).toContain('Where is your n8n?');
 		expect(message).toContain("connection 'n8n-local' not found (404)");
 		expect((caught as NoReachableCandidateError).attempts).toHaveLength(3);
+		// One candidate answered with HTTP, so this is not the "wrong location" case.
+		expect(message).not.toContain('only work from the same Mac');
+	});
+
+	it('points at Where is your n8n? → Remote when only private URLs were in the code and none answered', async () => {
+		const { http } = scriptedHttp({});
+		const cfg = config({
+			candidates: [
+				'http://127.0.0.1:1337',
+				'http://host.docker.internal:1337',
+				'http://192.168.1.20:1337',
+			],
+		});
+		const transport = new PlaintextTransport(http);
+		let caught: unknown;
+		try {
+			await selectBaseUrl(cfg, transport);
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeInstanceOf(NoReachableCandidateError);
+		const message = (caught as Error).message;
+		expect(message).toContain('only work from the same Mac or its network');
+		expect(message).toContain('Where is your n8n?');
+		expect(message).toContain('Remote');
+	});
+
+	it('does not blame the location when a public relay URL was among the dead candidates', async () => {
+		const { http } = scriptedHttp({});
+		const cfg = config({ candidates: ['http://127.0.0.1:1337', 'https://0xabc.agent.osaurus.ai'] });
+		const transport = new PlaintextTransport(http);
+		await expect(selectBaseUrl(cfg, transport)).rejects.toThrow(/No Osaurus URL/);
+		try {
+			await selectBaseUrl(cfg, transport);
+		} catch (error) {
+			expect((error as Error).message).not.toContain('only work from the same Mac');
+		}
+	});
+
+	it('caps each plaintext probe at the probe timeout instead of the transport default', async () => {
+		const timeouts: Array<number | undefined> = [];
+		const http: HttpFn = async (request) => {
+			timeouts.push(request.timeoutMs);
+			throw new Error('ETIMEDOUT');
+		};
+		const cfg = config({ candidates: ['http://127.0.0.1:1337', 'http://10.0.0.5:1337'] });
+		const transport = new PlaintextTransport(http, 30_000);
+		await expect(selectBaseUrl(cfg, transport)).rejects.toThrow(NoReachableCandidateError);
+		expect(timeouts).toEqual([PROBE_TIMEOUT_MS, PROBE_TIMEOUT_MS]);
+		// Ordinary channel requests keep the transport default.
+		timeouts.length = 0;
+		await transport
+			.request('http://127.0.0.1:1337', 'POST', '/channels/n8n/x/inbound', '{}', {})
+			.catch(() => undefined);
+		expect(timeouts).toEqual([30_000]);
 	});
 
 	it('separates configs with different secrets in the cache', async () => {
@@ -185,5 +244,62 @@ describe('explainProbe', () => {
 		expect(explainProbe({ baseUrl: 'u', status: 0, body: '', error: 'ECONNREFUSED' }, cfg)).toBe(
 			'u: ECONNREFUSED',
 		);
+	});
+
+	it('names the current Osaurus steps, not the old ones', () => {
+		const cfg = config();
+		const fix = explainProbe({ baseUrl: 'u', status: 426, body: '' }, cfg);
+		expect(fix).toContain('Who answers?');
+		expect(fix).toContain('Pair');
+		expect(fix).toContain('Where is your n8n?');
+		expect(fix).not.toMatch(/How Osaurus replies|Connect n8n|Remote callers/);
+	});
+});
+
+describe('locationHint', () => {
+	it('classifies private-only URLs', () => {
+		for (const url of [
+			'http://127.0.0.1:1337',
+			'http://localhost:1337',
+			'http://host.docker.internal:1337',
+			'http://192.168.1.20:1337',
+			'http://10.0.0.5:1337',
+			'http://172.16.4.2:1337',
+			'http://172.31.255.1:1337',
+			'http://169.254.1.1:1337',
+			'http://my-mac.local:1337',
+			'http://[::1]:1337',
+			'http://[fe80::1]:1337',
+		]) {
+			expect(isPrivateOnlyUrl(url), url).toBe(true);
+		}
+		for (const url of [
+			'https://0xabc.agent.osaurus.ai',
+			'http://172.32.0.1:1337',
+			'http://8.8.8.8:1337',
+			'https://n8n.example.com',
+			'not a url',
+		]) {
+			expect(isPrivateOnlyUrl(url), url).toBe(false);
+		}
+	});
+
+	it('fires only when every candidate is private and none answered at all', () => {
+		const dead = (baseUrl: string) => ({ baseUrl, status: 0, body: '', error: 'ECONNREFUSED' });
+		expect(locationHint([dead('http://127.0.0.1:1337'), dead('http://10.0.0.5:1337')])).toMatch(
+			/Remote/,
+		);
+		// A public candidate means the code was already scoped for remote.
+		expect(
+			locationHint([dead('http://127.0.0.1:1337'), dead('https://0xabc.agent.osaurus.ai')]),
+		).toBeNull();
+		// An HTTP answer means the server was reached; the location is right.
+		expect(
+			locationHint([
+				dead('http://127.0.0.1:1337'),
+				{ baseUrl: 'http://10.0.0.5:1337', status: 426, body: '' },
+			]),
+		).toBeNull();
+		expect(locationHint([])).toBeNull();
 	});
 });

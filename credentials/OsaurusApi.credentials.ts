@@ -37,7 +37,7 @@ export class OsaurusApi implements ICredentialType {
 			default: '',
 			placeholder: 'osk-v1-...',
 			description:
-				'Agent-scoped osk-v1 key from Share Agent. This is not the n8n inbound channel secret. Remote callers need Secure Channel, which this package does not implement',
+				'Agent-scoped osk-v1 key from Share Agent (also under Pair → Advanced in the n8n channel). This is not the n8n inbound channel secret. The Agent resource is plaintext-only, so it works from the same Mac or LAN; from another machine Osaurus answers 426 — use the Channel resource with a pairing code instead',
 			required: true,
 		},
 	];
